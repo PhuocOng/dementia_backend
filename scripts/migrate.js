@@ -8,6 +8,8 @@ const collectionName = "triviacategories";
 
 async function migrateData() {
   try {
+
+    const hf="fff";
     // Connect to MongoDB
     const connection = await mongoose.createConnection(uri, {
       useNewUrlParser: true,
