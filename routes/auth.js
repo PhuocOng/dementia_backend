@@ -2,6 +2,8 @@ const express = require("express");
 const crypto = require("crypto"); // Import the crypto module
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
+const jwt = require("jsonwebtoken");
+
 
 const router = express.Router();
 
@@ -48,58 +50,57 @@ router.get("/get-user-id", authMiddleware, async (req, res) => {
     res.status(500).json({ message: "Internal Server Error" });
   }
 });
-router.post("/signup", async (req, res) => {
-  const { name, email, password } = req.body;
-
+// Register
+router.post("/register", async (req, res) => {
   try {
-    console.log("Signup Password Input:", password);
+    const { name, email, password, role } = req.body;
 
-    const hashedPassword = await bcrypt.hash(password, 10);
-    console.log("Hashed Password for Signup:", hashedPassword);
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ message: "User already exists" });
 
-    const sessionToken = crypto.randomBytes(64).toString("hex");
+    const user = new User({ name, email, password, role });
+    await user.save();
 
-    const newUser = new User({
-      name,
-      email,
-      password: hashedPassword,
-      sessionToken,
-    });
-
-    await newUser.save();
-    res.status(201).json({ sessionToken });
+    res.status(201).json({ message: "User registered successfully" });
   } catch (err) {
-    console.error("Signup Error:", err);
-    res.status(500).json({ message: "Internal Server Error" });
+    res.status(500).json({ message: "Registration failed", error: err.message });
   }
 });
+// Login
 router.post("/login", async (req, res) => {
-  const { email, password } = req.body;
-
   try {
+    const { email, password } = req.body;
+    console.log(email, password);
+
+    // Find user by email
     const user = await User.findOne({ email });
-    console.log("User Found:", user);
+    console.log("check", user);
+    if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
-    if (!user) return res.status(400).json({ message: "User not found" });
-
-    console.log("Plain Password Input:", password);
-    console.log("Hashed Password in DB:", user.password);
-
+    // Compare password
     const isMatch = await bcrypt.compare(password, user.password);
-    console.log("Password Match:", isMatch);
-
+    console.log(isMatch);
     if (!isMatch) return res.status(400).json({ message: "Invalid credentials" });
 
-    const sessionToken = crypto.randomBytes(64).toString("hex");
-    user.sessionToken = sessionToken;
-    await user.save();
-    console.log("Session Token Saved:", sessionToken);
+    // Generate JWT token
+    const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
 
-    res.json({ sessionToken });
+    // Optional: store token
+    user.sessionToken = token;
+    await user.save();
+
+    // Send response with userId
+    res.json({
+      token,
+      role: user.role,
+      name: user.name,
+      userId: user._id // <-- added this line
+    });
   } catch (err) {
-    console.error("Login Error:", err);
-    res.status(500).json({ message: "Internal Server Error" });
+    res.status(500).json({ message: "Login failed", error: err.message });
   }
 });
+
+
 
 module.exports = router;

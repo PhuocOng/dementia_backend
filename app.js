@@ -2,18 +2,25 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+
 require("dotenv").config();
 
 const axios = require("axios");
 const crypto = require("crypto");
 const Trivia = require("./models/TriviaCategory");
 const UserActivity = require("./models/UserActivity");
+const SimilarQuestion = require('./models/SimilarQuestion');
+
 const User = require("./models/User");
+
 
 const app = express();
 
+
 // Middleware
 app.use(cors());
+app.use(express.json());
+
 app.use(bodyParser.json());
 
 const authMiddleware = async (req, res, next) => {
@@ -269,6 +276,106 @@ app.get("/api/questions", async (req, res, next) => {
   }
 });
 
+app.get('/api/random-questionss', async (req, res) => {
+  const { categories } = req.query;
+
+  if (!categories) {
+    return res.status(400).json({ message: 'Categories are required.' });
+  }
+
+  const categoryList = categories.split(',');
+
+  try {
+    // Step 1: Fetch 8 random questions from Trivia collection
+    const questions = await Trivia.aggregate([
+      { $match: { category: { $in: categoryList } } },
+      { $unwind: '$questions' },
+      { $sample: { size: 8 } },
+      { $project: { _id: 0, question: '$questions' } },
+    ]);
+
+    // Step 2: Fetch all similar question pairs
+    const similarPairs = await SimilarQuestion.find();
+
+    // Step 3: Select ONE random similar question pair
+    const randomIndex = Math.floor(Math.random() * similarPairs.length);
+    const randomPair = similarPairs[randomIndex];
+
+    // Step 4: Extract question texts
+    const similarQuestionTexts = [randomPair.question_1, randomPair.question_2];
+    console.log('Fetched similar questions:', similarQuestionTexts);
+
+    // Step 5: Find full question objects that match the similar question texts
+    const similarQuestionDocs = await Trivia.aggregate([
+      { $unwind: '$questions' },
+      { $match: { 'questions.question': { $in: similarQuestionTexts } } },
+      { $project: { _id: 0, question: '$questions' } }
+    ]);
+
+    // Step 6: Combine and send
+    const finalQuestions = [...questions.map(q => q.question), ...similarQuestionDocs.map(q => q.question)];
+
+    res.json({ questions: finalQuestions });
+  } catch (error) {
+    console.error('Error fetching random or similar questions:', error);
+    res.status(500).json({ message: 'Failed to fetch questions.' });
+  }
+});
+
+
+app.get('/api/random-questionsss', async (req, res) => {
+  const { categories } = req.query;
+
+  if (!categories) {
+    return res.status(400).json({ message: 'Categories are required.' });
+  }
+
+  const categoryList = categories.split(',');
+
+  try {
+    // Step 1: Fetch 8 random questions
+    const randomQuestions = await Trivia.aggregate([
+      { $match: { category: { $in: categoryList } } },
+      { $unwind: '$questions' },
+      { $sample: { size: 8 } },
+      { $project: { _id: 0, question: '$questions' } },
+    ]);
+
+    // Step 2: Fetch all similar question pairs
+    const similarPairs = await SimilarQuestion.find();
+    const randomPair = similarPairs[Math.floor(Math.random() * similarPairs.length)];
+    const similarQuestionTexts = [randomPair.question_1, randomPair.question_2];
+
+    // Step 3: Get full question objects for similar questions
+    const similarQuestionDocs = await Trivia.aggregate([
+      { $unwind: '$questions' },
+      { $match: { 'questions.question': { $in: similarQuestionTexts } } },
+      { $project: { _id: 0, question: '$questions' } }
+    ]);
+
+    // Step 4: Combine all questions
+    const combinedQuestions = [...randomQuestions.map(q => q.question), ...similarQuestionDocs.map(q => q.question)];
+
+    // Step 5: Identify indexes of similar questions in the final array
+    const similarPairIndices = [];
+    for (let i = 0; i < combinedQuestions.length; i++) {
+      if (similarQuestionTexts.includes(combinedQuestions[i].question)) {
+        similarPairIndices.push(i);
+      }
+    }
+    console.log(similarPairIndices)
+    // Step 6: Respond with questions + similar pair index info
+    res.json({
+      questions: combinedQuestions,
+      similarPairIndices // e.g., [8, 9]
+    });
+  } catch (error) {
+    console.error('Error fetching questions:', error);
+    res.status(500).json({ message: 'Failed to fetch questions.' });
+  }
+});
+
+
 
 app.get('/api/random-questions', async (req, res) => {
   const { categories } = req.query; // Comma-separated list of categories
@@ -284,7 +391,7 @@ app.get('/api/random-questions', async (req, res) => {
     const questions = await Trivia.aggregate([
       { $match: { category: { $in: categoryList } } },
       { $unwind: '$questions' },
-      { $sample: { size: 10 } }, // Select 10 random questions
+      { $sample: { size: 10 } }, // Select 8 random questions
       { $project: { _id: 0, question: '$questions' } },
     ]);
 
@@ -295,15 +402,7 @@ app.get('/api/random-questions', async (req, res) => {
   }
 });
 
-app.get('/api/users', async (req, res) => {
-  try {
-    const users = await User.find();
-    res.json({users: users});
-  } catch (error) {
-    console.error('Error fetching users:', error);
-    res.status(500).json({ message: 'Failed to fetch users.' });
-  }
-});
+
 
 app.get('/api/users/:id', async (req, res) => {
   try {
@@ -328,6 +427,37 @@ app.get('/api/users/:id', async (req, res) => {
   }
 })
 
+// GET /api/admin/users
+// GET /api/admin/users
+app.get('/admin/users', async (req, res) => {
+  try {
+    const users = await UserActivity.find()
+      .populate('userId', 'name email') // populate basic user info
+      .lean();
+
+    const usersWithScores = users.map(user => {
+      const repeatedScores = user.repeatedQuestionScores || [];
+      const totalScore = repeatedScores.reduce((sum, item) => sum + (item.score || 0), 0);
+      const attempts = repeatedScores.length;
+
+      return {
+        _id: user._id,
+        name: user.userId?.name || 'N/A',
+        email: user.userId?.email || 'N/A',
+        totalScore,
+        attempts,
+      };
+    });
+
+    res.json(usersWithScores);
+  } catch (error) {
+    console.error('Admin fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch users' });
+  }
+});
+
+
+
 if (process.env.NODE_ENV !== "test") {
   mongoose
   .connect(process.env.MONGO_URI, {
@@ -337,6 +467,129 @@ if (process.env.NODE_ENV !== "test") {
   .then(() => console.log("MongoDB Connected"))
   .catch((err) => console.log(err));
 }
+
+// routes/similarQuestions.js or inside your main server file
+app.get('/api/similar-questions', async (req, res) => {
+  try {
+    const similarQuestions = await SimilarQuestion.find(); // 👈 fetches all documents, no filter
+    res.json(similarQuestions);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send('Error fetching similar questions');
+  }
+});
+
+
+// POST /api/user-activity/repeated-score
+app.post('/api/repeated-score', async (req, res) => {
+  const { userId, q1Text, q2Text, status, score } = req.body;
+
+  if (!userId || !q1Text || !q2Text || !status || score === undefined) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  try {
+    const update = {
+      $push: {
+        repeatedQuestionScores: {
+          q1Text,
+          q2Text,
+          status,
+          score,
+          timestamp: new Date()
+        }
+      }
+    };
+
+    const userActivity = await UserActivity.findOneAndUpdate(
+      { userId },
+      update,
+      { upsert: true, new: true }
+    );
+
+    res.status(200).json({ message: 'Score saved', userActivity });
+  } catch (error) {
+    console.error('Error saving repeated question score:', error);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+
+app.get("/api/repeated-scores", async (req, res) => {
+  try {
+    const allActivities = await UserActivity.find({}, "userId repeatedQuestionScores").populate("userId", "name email");
+    res.json(allActivities);
+  } catch (error) {
+    console.error("Error fetching all repeated scores:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/repeated-scores/:userId", async (req, res) => {
+  const { userId } = req.params;
+  try {
+    const userActivity = await UserActivity.findOne({ userId }, "repeatedQuestionScores");
+    if (!userActivity) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    res.json(userActivity.repeatedQuestionScores);
+  } catch (error) {
+    console.error("Error fetching user scores:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+
+// GET /api/repeated-scores-timeline
+app.get("/api/repeated-scores-timeline", async (req, res) => {
+  try {
+    const allActivities = await UserActivity.find({}, "userId repeatedQuestionScores").populate("userId", "name email");
+
+    const timelineMap = {};
+
+    allActivities.forEach(activity => {
+      if (activity.userId && Array.isArray(activity.repeatedQuestionScores)) {
+        const userId = activity.userId._id.toString();
+
+        // Each entry becomes a "timeline" point (indexed)
+        timelineMap[userId] = activity.repeatedQuestionScores.map((entry, index) => ({
+          attempt: index + 1,
+          score: entry.score,
+          status: entry.status,
+          q1Text: entry.q1Text,
+          q2Text: entry.q2Text,
+          timestamp: entry.timestamp,
+        }));
+      }
+    });
+
+    res.json(timelineMap);
+  } catch (error) {
+    console.error("Error creating repeated scores timeline:", error);
+    res.status(500).json({ message: "Server error" });
+  }
+});
+
+app.get("/api/user-id", async (req, res) => {
+  const { email } = req.query;
+
+  if (!email) {
+    return res.status(400).json({ error: "Email is required" });
+  }
+
+  try {
+    const user = await User.findOne({ email });
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    res.json({ userId: user._id });
+  } catch (error) {
+    console.error("Error fetching user by email:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
 
 // Routes
