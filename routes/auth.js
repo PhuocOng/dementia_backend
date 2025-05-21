@@ -3,6 +3,7 @@ const crypto = require("crypto"); // Import the crypto module
 const bcrypt = require("bcryptjs");
 const User = require("../models/User");
 const jwt = require("jsonwebtoken");
+const UserActivity = require('../models/UserActivity');
 
 
 const router = express.Router();
@@ -101,6 +102,25 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// DELETE /api/auth/delete-account
+router.delete("/delete-account", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // 1) Remove any activity logs (optional)
+    await UserActivity.deleteMany({ userId });
+
+    // 2) Remove the user
+    await User.findByIdAndDelete(userId);
+
+    // 3) (Optionally) You could also revoke tokens, clear cookies, etc.
+
+    res.json({ message: "Account deleted successfully." });
+  } catch (err) {
+    console.error("Error deleting account:", err);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+});
 
 
 module.exports = router;

@@ -132,6 +132,7 @@ app.get("/api", (req, res) => {
   res.json({ message: "Backend running on Vercel!" });
 });
 
+// Updated Endpoint to Add Questions
 app.post("/api/add-questions", async (req, res, next) => {
   console.log(req.body);
 
@@ -171,7 +172,6 @@ app.post("/api/add-questions", async (req, res, next) => {
     next(error);
   }
 });
-
 
 //Endpoint for user preferences
 app.get("/api/user-preferences", authMiddleware, async (req, res, next) => {
